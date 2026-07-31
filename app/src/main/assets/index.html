@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Chess</title>
+<style>
+  :root {
+    --void:     #0A0908;
+    --ash:      #14110D;
+    --brass:    #C8A45C;
+    --brass-hi: #E8D4A0;
+    --bone:     #F2ECE0;
+    --bone-dim: rgba(242,236,224,.52);
+    --ember:    #C2503A;
+    --hair:     rgba(242,236,224,.10);
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    overflow: hidden;
+    background: var(--void);
+    color: var(--bone);
+    font: 400 15px/1.45 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    overscroll-behavior: none; touch-action: none;
+    user-select: none; -webkit-user-select: none;
+  }
+
+  /* the room the board sits in */
+  #stage {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background:
+      radial-gradient(130% 80% at 50% 34%, #241E16 0%, #120F0C 46%, #0A0908 100%);
+  }
+  #stage::after {           /* soft pool of light under the board */
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: min(100vw, 100vh); height: min(100vw, 100vh);
+    transform: translate(-50%, -46%);
+    background: radial-gradient(closest-side, rgba(0,0,0,.62), rgba(0,0,0,0) 78%);
+    filter: blur(18px); pointer-events: none;
+  }
+
+  #board {
+    display: block; position: relative; z-index: 1;
+    touch-action: none;
+    box-shadow:
+      0 1px 0 rgba(255,240,210,.10),
+      0 18px 44px -12px rgba(0,0,0,.85),
+      0 4px 14px -4px rgba(0,0,0,.6);
+    opacity: 0; transform: scale(.985);
+    transition: opacity .5s ease, transform .5s cubic-bezier(.22,.9,.3,1);
+  }
+  body.ready #board { opacity: 1; transform: scale(1); }
+
+  /* ---- thinking bar ---------------------------------------------------- */
+  #progress {
+    position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 30;
+    overflow: hidden; opacity: 0; transition: opacity .25s ease;
+    pointer-events: none;
+  }
+  #progress.on { opacity: 1; }
+  #progress::before {
+    content: ''; position: absolute; top: 0; left: 0; height: 100%; width: 38%;
+    background: linear-gradient(90deg, transparent, var(--brass), var(--brass-hi), var(--brass), transparent);
+    animation: sweep 1.5s cubic-bezier(.5,0,.5,1) infinite;
+  }
+  @keyframes sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(360%); }
+  }
+
+  /* ---- strips ---------------------------------------------------------- */
+  .strip {
+    position: fixed; left: 0; right: 0;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 16px; z-index: 5; pointer-events: none;
+  }
+  .strip > * { pointer-events: auto; }
+  #top    { top: 0;    padding-top: calc(env(safe-area-inset-top, 0px) + 14px); padding-bottom: 10px; }
+  #bottom { bottom: 0; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); padding-top: 10px; }
+
+  .taken { display: flex; align-items: center; flex-wrap: wrap; gap: 0; min-height: 24px; flex: 1; }
+  .taken canvas { display: block; margin-right: -7px; opacity: .78; filter: saturate(.9); }
+  .edge {
+    font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--brass); letter-spacing: .04em; padding-left: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readout { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+  #status {
+    font-family: Georgia, "Noto Serif", "Times New Roman", serif;
+    font-size: 15px; font-weight: 400; letter-spacing: .07em;
+    color: var(--bone-dim); white-space: nowrap;
+  }
+  #status.check { color: var(--ember); }
+  #status.think { color: var(--brass); }
+  #depth {
+    font: 500 9.5px/1 ui-monospace, Menlo, monospace;
+    letter-spacing: .18em; text-transform: uppercase;
+    color: rgba(200,164,92,.62); min-height: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- buttons --------------------------------------------------------- */
+  .bar { display: flex; gap: 8px; justify-content: center; width: 100%; }
+  button {
+    appearance: none; border: 1px solid var(--hair);
+    background: rgba(24,20,15,.62);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    color: var(--bone); border-radius: 13px;
+    padding: 10px 15px; font: 500 13.5px/1 inherit; letter-spacing: .01em;
+    transition: transform .14s cubic-bezier(.3,.8,.4,1), background .18s ease,
+                border-color .18s ease, opacity .18s ease;
+  }
+  button:active { transform: scale(.93); background: rgba(200,164,92,.22); border-color: rgba(200,164,92,.4); }
+  button:disabled { opacity: .28; }
+  button:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+
+  /* ---- sheet ----------------------------------------------------------- */
+  #scrim {
+    position: fixed; inset: 0; background: rgba(4,3,2,.62); z-index: 10;
+    opacity: 0; pointer-events: none; transition: opacity .28s ease;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  }
+  #scrim.on { opacity: 1; pointer-events: auto; }
+  #sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 11;
+    background: linear-gradient(180deg, #1B1710 0%, #120F0B 100%);
+    border-top: 1px solid rgba(200,164,92,.24);
+    border-radius: 22px 22px 0 0;
+    padding: 8px 20px calc(env(safe-area-inset-bottom, 0px) + 24px);
+    transform: translateY(101%);
+    transition: transform .34s cubic-bezier(.24,.9,.28,1);
+    max-height: 84vh; overflow-y: auto;
+    box-shadow: 0 -20px 50px -20px rgba(0,0,0,.9);
+  }
+  #sheet.on { transform: translateY(0); }
+  .grab { width: 36px; height: 4px; border-radius: 2px; background: rgba(242,236,224,.20); margin: 6px auto 18px; }
+  .row { margin-bottom: 20px; }
+  .row h3 {
+    margin: 0 0 9px; font-size: 10px; font-weight: 700; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--brass);
+  }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button { flex: 1 1 auto; min-width: 60px; padding: 11px 8px; font-weight: 400; }
+  .seg button.on {
+    background: linear-gradient(180deg, var(--brass-hi), var(--brass));
+    color: #191309; border-color: var(--brass-hi); font-weight: 600;
+  }
+  .hint { margin: 8px 0 0; font-size: 11.5px; color: var(--bone-dim); line-height: 1.5; }
+
+  /* ---- promotion ------------------------------------------------------- */
+  #promo {
+    position: fixed; inset: 0; z-index: 20; display: none;
+    align-items: center; justify-content: center; background: rgba(4,3,2,.66);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  }
+  #promo.on { display: flex; animation: fadeIn .18s ease; }
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  #promo .card {
+    background: linear-gradient(180deg, #1D1811, #14100B);
+    border: 1px solid rgba(200,164,92,.32);
+    border-radius: 20px; padding: 14px; display: flex; gap: 8px;
+    box-shadow: 0 24px 60px -20px rgba(0,0,0,.95);
+  }
+  .promo-pick { padding: 6px; border-radius: 14px; background: rgba(200,164,92,.07); line-height: 0; }
+  .promo-pick canvas { display: block; }
+
+  /* ---- moves ----------------------------------------------------------- */
+  #moves {
+    font: 400 12.5px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--bone-dim); max-height: 30vh; overflow-y: auto;
+    background: rgba(0,0,0,.30); border: 1px solid var(--hair);
+    border-radius: 12px; padding: 11px 13px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* ---- landscape: chrome moves into the side gutters ------------------- */
+  body.lay-l #top, body.lay-l #bottom {
+    top: 0; bottom: 0; width: var(--gutter, 150px);
+    flex-direction: column; justify-content: center; padding: 20px 14px;
+  }
+  body.lay-l #top    { left: 0; right: auto; }
+  body.lay-l #bottom { right: 0; left: auto; }
+  body.lay-l .bar    { flex-direction: column; width: 100%; }
+  body.lay-l .bar button { width: 100%; }
+  body.lay-l .taken  { flex: 0 0 auto; justify-content: center; }
+  body.lay-l #status { white-space: normal; text-align: center; }
+
+  /* ---- very tight screens ---------------------------------------------- */
+  body.lay-c #top {
+    background: linear-gradient(to bottom, rgba(8,7,6,.88), rgba(8,7,6,.0));
+  }
+  body.lay-c #bottom {
+    background: linear-gradient(to top, rgba(8,7,6,.88), rgba(8,7,6,.0));
+  }
+  body.lay-c button { padding: 8px 11px; font-size: 12px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, #board { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+
+<div id="stage"><canvas id="board"></canvas></div>
+
+<div class="strip" id="top">
+  <div class="taken" id="takenByWhite"></div>
+  <div class="readout">
+    <div id="status">Your move</div>
+    <div id="depth"></div>
+  </div>
+  <div class="edge" id="edgeTop"></div>
+</div>
+
+<div class="strip" id="bottom">
+  <div class="bar">
+    <button id="btnNew">New game</button>
+    <button id="btnUndo">Undo</button>
+    <button id="btnHint">Hint</button>
+    <button id="btnMore">Settings</button>
+  </div>
+</div>
+
+<div id="promo"><div class="card"></div></div>
+
+<div id="scrim"></div>
+<div id="sheet">
+  <div class="grab"></div>
+
+  <div class="row">
+    <h3>Strength</h3>
+    <div class="seg" id="segLevel">
+      <button data-v="1">Strong</button>
+      <button data-v="2">Expert</button>
+      <button data-v="3">Master</button>
+      <button data-v="4">Grandmaster</button>
+      <button data-v="5">Merciless</button>
+    </div>
+    <p class="hint">Every level plays the full search — none of them throw away
+      material on purpose. Higher levels think longer and look further ahead.</p>
+  </div>
+
+  <div class="row">
+    <h3>Board &amp; pieces</h3>
+    <div class="seg" id="segStyle">
+      <button data-v="wood">Wood</button>
+      <button data-v="marble">Marble</button>
+      <button data-v="metal">Metal</button>
+      <button data-v="grass">Grass</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <h3>You play</h3>
+    <div class="seg" id="segSide">
+      <button data-v="w">White</button>
+      <button data-v="b">Black</button>
+      <button data-v="2">Two players</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <h3>Board</h3>
+    <div class="seg" id="segOpts">
+      <button data-k="coords">Coordinates</button>
+      <button data-k="dots">Move hints</button>
+      <button data-k="sound">Sound</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <h3>Moves</h3>
+    <div id="moves">&mdash;</div>
+  </div>
+
+  <div class="row">
+    <div class="seg">
+      <button id="btnFlip">Flip board</button>
+      <button id="btnCopy">Copy PGN</button>
+      <button id="btnClose">Done</button>
+    </div>
+  </div>
+</div>
+
+<script src="engine.js"></script>
+<script src="pieces.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>

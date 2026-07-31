@@ -1,0 +1,47 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate the Gradle project
+        id: find
+        run: |
+          FILE=$(find . -name settings.gradle.kts -not -path '*/build/*' | head -1)
+          if [ -z "$FILE" ]; then
+            echo "No settings.gradle.kts found. Repo contents:"
+            ls -la
+            exit 1
+          fi
+          DIR=$(dirname "$FILE")
+          echo "Project directory: $DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        working-directory: ${{ steps.find.outputs.dir }}
+        run: |
+          gradle wrapper --gradle-version 8.9 --distribution-type bin
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: find . -name '*.apk' -path '*debug*' -exec cp {} chess.apk \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chess-apk
+          path: chess.apk
+          if-no-files-found: error
